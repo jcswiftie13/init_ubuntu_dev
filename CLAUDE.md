@@ -21,12 +21,13 @@ Re-running is safe — every step guards with `command -v` or file-existence che
 
 | Section | What it does |
 |---|---|
-| `# --- 1)` | apt update + base packages (zsh, git, curl, build-essential) |
+| `# --- 1)` | apt update + base packages (zsh, git, curl, build-essential, bash-completion) |
 | `# --- 2)` | zsh + Powerlevel10k + autosuggestions + syntax-highlighting (direct git clone, no Oh My Zsh) |
 | `# --- 3)` | Latest Go tarball → `/usr/local/go`; symlinks in `/usr/local/bin` |
 | `# --- 4)` | Latest jq binary → `/usr/local/bin` (GitHub release; apt fallback) |
 | `# --- 5)` | Node.js 22 via nodesource + TypeScript global → `/usr/local/bin` |
-| `# --- 6)` | Cursor (official `.deb`) |
+| `# --- 6)` | Cursor (official `.deb`, latest version resolved from the update JSON API; skips re-download when already current) |
+| `# --- 6b)` | Cursor extensions: git-graph, gitlens, gitblame, golang.go, claude-code |
 | `# --- 7)` | Claude Code CLI via `claude.ai/install.sh` → `~/.local/bin` |
 | `# --- 8)` | Git global identity (`user.email` / `user.name`) |
 | `# --- 9)` | golangci-lint → `/usr/local/bin` |
@@ -35,6 +36,8 @@ Re-running is safe — every step guards with `command -v` or file-existence che
 | `# --- 12b)` | `rtk init -g` + `rtk init -g --agent cursor` |
 | `# --- 13)` | Claude Code plugins: claude-code-setup, gopls-lsp, superpowers, claude-hud, caveman |
 | `# --- 14)` | openspec global npm install |
+| `# --- 15)` | Helm → `/usr/local/bin` (latest release tarball + sha256 verify) |
+| `# --- 16)` | git + helm shell completions → `~/.config/zsh/completions`; `compinit` block in `~/.zshrc`, bash-completion block in `~/.bashrc` |
 
 ## Key patterns
 
@@ -43,6 +46,7 @@ Re-running is safe — every step guards with `command -v` or file-existence che
 - **`~/.local/bin` on PATH**: Claude Code and RTK install here; the script appends `export PATH="${HOME}/.local/bin:${PATH}"` to `~/.zshrc` (marker: `env-init: user local bin`).
 - **Go PATH**: `~/go/bin` (GOPATH/bin) appended to `~/.zshrc` (marker: `env-init: go bin`).
 - **Zsh plugins**: sourced directly in `~/.zshrc` from `~/.config/zsh/plugins/` (marker: `env-init: zsh plugins`).
+- **Completions**: `~/.config/zsh/completions/` holds `_git` (git's `contrib/completion/git-completion.zsh`), its companion `git-completion.bash`, and `_helm`; `~/.zshrc` puts that dir on `fpath` and runs `compinit -i` (marker: `env-init: completions`, same marker in `~/.bashrc`).
 
 ## Extending the script
 

@@ -40,7 +40,7 @@ if command -v apt-get >/dev/null 2>&1; then
   $SUDO apt-get update -qq
   $SUDO apt-get install -y \
     zsh git curl wget ca-certificates gnupg unzip \
-    build-essential
+    build-essential bash-completion
 else
   die "This script expects apt-get (Debian/Ubuntu). Install zsh/git/curl manually on other distros."
 fi
@@ -143,16 +143,58 @@ if ! $SUDO npm install -g typescript --prefix /usr/local; then
   log "WARN: global TypeScript (tsc) install failed; retry: sudo npm install -g typescript --prefix /usr/local"
 fi
 
-# --- 6) Cursor (.deb) ---
+# --- 6) Cursor (.deb, always the latest release) ---
+# The version segment of the update URL is the version the *client reports having*; the API
+# answers with the newest release regardless. Ask the JSON endpoint so we learn the actual
+# version number and can skip re-downloading ~200 MB when we are already up to date.
 CURSOR_DEB="/tmp/cursor-latest.deb"
-if curl -fsSL "https://api2.cursor.sh/updates/download/golden/linux-${CURSOR_ARCH}-deb/cursor/3.14" -o "${CURSOR_DEB}"; then
+CURSOR_JSON="$(curl -fsSL "https://api2.cursor.sh/updates/api/download/golden/linux-${CURSOR_ARCH}-deb/cursor/0.0.0" || true)"
+CURSOR_VER="$(printf '%s' "${CURSOR_JSON}" | sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' | head -1)"
+CURSOR_URL="$(printf '%s' "${CURSOR_JSON}" | sed -n 's/.*"debUrl": *"\([^"]*\)".*/\1/p' | head -1)"
+# Fall back to the redirecting endpoint if the JSON API changes shape.
+[[ -n "${CURSOR_URL}" ]] || CURSOR_URL="https://api2.cursor.sh/updates/download/golden/linux-${CURSOR_ARCH}-deb/cursor/0.0.0"
+CURSOR_HAVE="$(dpkg-query -W -f='${Version}' cursor 2>/dev/null || true)"
+log "Cursor: latest=${CURSOR_VER:-unknown} installed=${CURSOR_HAVE:-none}"
+
+if [[ -n "${CURSOR_VER}" && "${CURSOR_HAVE}" == "${CURSOR_VER}" ]]; then
+  log "Cursor already at the latest version (${CURSOR_VER}); skipping download."
+elif curl -fsSL "${CURSOR_URL}" -o "${CURSOR_DEB}"; then
   $SUDO apt-get install -y "${CURSOR_DEB}" 2>/dev/null || $SUDO dpkg -i "${CURSOR_DEB}" 2>/dev/null || \
     log "WARN: Cursor .deb install failed; install from https://cursor.com"
   $SUDO apt-get -f install -y 2>/dev/null || true
+  log "Cursor installed: $(dpkg-query -W -f='${Version}' cursor 2>/dev/null || echo 'unknown')"
 else
   log "WARN: Cursor .deb download failed; install from https://cursor.com"
 fi
 rm -f "${CURSOR_DEB}"
+
+# --- 6b) Cursor extensions (Cursor marketplace / Open VSX ids) ---
+CURSOR_EXTS=(
+  mhutchie.git-graph      # Git Graph
+  eamodio.gitlens         # GitLens
+  waderyan.gitblame       # Git Blame
+  golang.go               # Go
+  anthropic.claude-code   # Claude Code
+)
+if command -v cursor >/dev/null 2>&1; then
+  # Electron refuses its sandbox when run as root; the CLI needs --no-sandbox there.
+  CURSOR_CLI_FLAGS=()
+  [[ "${EUID:-0}" -eq 0 ]] && CURSOR_CLI_FLAGS+=(--no-sandbox)
+  CURSOR_HAVE_EXTS="$(cursor "${CURSOR_CLI_FLAGS[@]}" --list-extensions 2>/dev/null || true)"
+  for CURSOR_EXT in "${CURSOR_EXTS[@]}"; do
+    if printf '%s\n' "${CURSOR_HAVE_EXTS}" | grep -qix "${CURSOR_EXT}"; then
+      log "Cursor extension already installed: ${CURSOR_EXT}"
+      continue
+    fi
+    if cursor "${CURSOR_CLI_FLAGS[@]}" --install-extension "${CURSOR_EXT}" --force >/dev/null 2>&1; then
+      log "Cursor extension installed: ${CURSOR_EXT}"
+    else
+      log "WARN: Cursor extension install failed: ${CURSOR_EXT} (retry: cursor --install-extension ${CURSOR_EXT})"
+    fi
+  done
+else
+  log "WARN: cursor CLI not found; skipping extension installs"
+fi
 
 # --- 7) Claude Code CLI (native installer) ---
 if ! curl -fsSL https://claude.ai/install.sh | bash; then
@@ -311,6 +353,93 @@ if command -v npm >/dev/null 2>&1; then
   fi
 else
   log "WARN: npm not found; skipping openspec install"
+fi
+
+# --- 15) Helm → /usr/local/bin (release tarball + sha256) ---
+HELM_TAG="$(
+  curl -fsSL -H 'Accept: application/vnd.github+json' -H 'User-Agent: setup.sh' \
+    https://api.github.com/repos/helm/helm/releases/latest |
+    sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1
+)"
+HELM_TMP="$(mktemp -d "${TMPDIR:-/tmp}/helm.XXXXXX")"
+HELM_OK=0
+if [[ -n "${HELM_TAG}" ]]; then
+  HELM_TB="helm-${HELM_TAG}-linux-${GOARCH}.tar.gz"
+  HELM_URL="https://get.helm.sh/${HELM_TB}"
+  if curl -fsSL "${HELM_URL}" -o "${HELM_TMP}/${HELM_TB}" &&
+    curl -fsSL "${HELM_URL}.sha256sum" -o "${HELM_TMP}/${HELM_TB}.sha256sum"; then
+    HELM_WANT="$(awk '{ print $1; exit }' "${HELM_TMP}/${HELM_TB}.sha256sum")"
+    HELM_GOT="$(sha256sum "${HELM_TMP}/${HELM_TB}" | awk '{ print $1 }')"
+    if [[ -n "${HELM_WANT}" && "${HELM_WANT}" == "${HELM_GOT}" ]]; then
+      tar -C "${HELM_TMP}" -xzf "${HELM_TMP}/${HELM_TB}"
+      if $SUDO install -m 0755 "${HELM_TMP}/linux-${GOARCH}/helm" /usr/local/bin/helm; then
+        HELM_OK=1
+        log "helm installed: $(/usr/local/bin/helm version 2>/dev/null | head -n1 || true)"
+      fi
+    else
+      log "WARN: helm tarball checksum mismatch (${HELM_TB})"
+    fi
+  else
+    log "WARN: helm download failed (${HELM_TAG})"
+  fi
+else
+  log "WARN: could not resolve helm latest release tag from GitHub API"
+fi
+rm -rf "${HELM_TMP}"
+if [[ "${HELM_OK}" -ne 1 ]]; then
+  log "WARN: helm not installed; fallback: curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-4 | bash"
+fi
+
+# --- 16) Shell completions (git + helm) for zsh ---
+# git ships bash completions; contrib/completion/git-completion.zsh is the zsh wrapper and must
+# be installed as `_git` on fpath, with a zstyle pointing it at the bash file it sources.
+ZSH_COMPL_DIR="${HOME}/.config/zsh/completions"
+mkdir -p "${ZSH_COMPL_DIR}"
+GIT_COMPL_BASE="https://raw.githubusercontent.com/git/git/master/contrib/completion"
+GIT_COMPL_TMP="$(mktemp -d "${TMPDIR:-/tmp}/git-completion.XXXXXX")"
+if curl -fsSL "${GIT_COMPL_BASE}/git-completion.bash" -o "${GIT_COMPL_TMP}/git-completion.bash" &&
+  curl -fsSL "${GIT_COMPL_BASE}/git-completion.zsh" -o "${GIT_COMPL_TMP}/_git"; then
+  # Move only after both downloads succeed, so a partial fetch never lands on fpath.
+  install -m 0644 "${GIT_COMPL_TMP}/git-completion.bash" "${ZSH_COMPL_DIR}/git-completion.bash"
+  install -m 0644 "${GIT_COMPL_TMP}/_git" "${ZSH_COMPL_DIR}/_git"
+  log "git completion installed: ${ZSH_COMPL_DIR}/_git"
+else
+  log "WARN: git completion download failed; zsh's bundled _git will be used instead"
+fi
+rm -rf "${GIT_COMPL_TMP}"
+
+if command -v helm >/dev/null 2>&1; then
+  if helm completion zsh >"${ZSH_COMPL_DIR}/_helm" 2>/dev/null; then
+    chmod 0644 "${ZSH_COMPL_DIR}/_helm"
+    log "helm completion installed: ${ZSH_COMPL_DIR}/_helm"
+  else
+    rm -f "${ZSH_COMPL_DIR}/_helm"
+    log "WARN: helm completion generation failed"
+  fi
+fi
+
+# compinit is what actually turns the completions above on; -i skips insecure-dir prompts.
+if [[ -f "${ZSHRC}" ]] && ! grep -q 'env-init: completions' "${ZSHRC}" 2>/dev/null; then
+  cat >> "${ZSHRC}" <<'ZSHCOMPL'
+
+# env-init: completions (git, helm)
+fpath=("$HOME/.config/zsh/completions" $fpath)
+zstyle ':completion:*:*:git:*' script "$HOME/.config/zsh/completions/git-completion.bash"
+autoload -Uz compinit && compinit -i
+zstyle ':completion:*' menu select
+zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}'
+ZSHCOMPL
+fi
+
+# bash users get git completion from the bash-completion package; source helm's there too.
+BASHRC="${HOME}/.bashrc"
+if [[ -f "${BASHRC}" ]] && ! grep -q 'env-init: completions' "${BASHRC}" 2>/dev/null; then
+  cat >> "${BASHRC}" <<'BASHCOMPL'
+
+# env-init: completions (git, helm)
+[[ -f /usr/share/bash-completion/bash_completion ]] && source /usr/share/bash-completion/bash_completion
+command -v helm >/dev/null 2>&1 && source <(helm completion bash)
+BASHCOMPL
 fi
 
 log "Done. Open a new zsh session (or run: exec zsh) and run 'p10k configure' once to finish Powerlevel10k."
