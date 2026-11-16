@@ -9,12 +9,11 @@ Single-script Ubuntu dev environment bootstrap. Installs and configures a full t
 | 1 | **Zsh + Powerlevel10k** | Direct git clone — no Oh My Zsh, no zinit |
 | 2 | **Go + golangci-lint** | Latest stable from go.dev; golangci-lint via official script |
 | 3 | **jq** | Latest binary from GitHub releases; apt fallback |
-| 4 | **Node.js 22** | Via nodesource + TypeScript global |
-| 5 | **Cursor** | Official `.deb` installer |
-| 6 | **Claude Code** | Native installer → `~/.local/bin` |
-| 7 | **RTK** | Rust Token Killer → `~/.local/bin`; initialized for global + Cursor |
-| 8 | **Claude plugins** | claude-code-setup, superpowers, claude-hud, caveman |
-| 9 | **openspec** | Global npm install |
+| 4 | **Node.js 24** | Via nodesource (upgrades if < 22.18) + TypeScript global |
+| 5 | **Claude Code** | Native installer → `~/.local/bin` |
+| 6 | **RTK** | Rust Token Killer → `~/.local/bin`; initialized globally |
+| 7 | **Claude plugins** | claude-code-setup, superpowers, claude-hud, caveman |
+| 8 | **openspec** | Global npm install |
 
 ## Requirements
 

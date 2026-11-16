@@ -25,15 +25,12 @@ Re-running is safe — every step guards with `command -v` or file-existence che
 | `# --- 2)` | zsh + Powerlevel10k + autosuggestions + syntax-highlighting (direct git clone, no Oh My Zsh) |
 | `# --- 3)` | Latest Go tarball → `/usr/local/go`; symlinks in `/usr/local/bin` |
 | `# --- 4)` | Latest jq binary → `/usr/local/bin` (GitHub release; apt fallback) |
-| `# --- 5)` | Node.js 22 via nodesource + TypeScript global → `/usr/local/bin` |
-| `# --- 6)` | Cursor (official `.deb`, latest version resolved from the update JSON API; skips re-download when already current) |
-| `# --- 6b)` | Cursor extensions: git-graph, gitlens, gitblame, golang.go, claude-code |
+| `# --- 5)` | Node.js 24 via nodesource (upgrades if < 22.18) + TypeScript global → `/usr/local/bin` |
 | `# --- 7)` | Claude Code CLI via `claude.ai/install.sh` → `~/.local/bin` |
 | `# --- 8)` | Git global identity (`user.email` / `user.name`) |
 | `# --- 9)` | golangci-lint → `/usr/local/bin` |
-| `# --- 11)` | Clone `otel-traces-test` → `~/Documents/otel-traces-test` |
 | `# --- 12)` | RTK (Rust Token Killer) installer → `~/.local/bin` |
-| `# --- 12b)` | `rtk init -g` + `rtk init -g --agent cursor` |
+| `# --- 12b)` | `rtk init -g` |
 | `# --- 13)` | Claude Code plugins: claude-code-setup, gopls-lsp, superpowers, claude-hud, caveman |
 | `# --- 14)` | openspec global npm install |
 | `# --- 15)` | Helm → `/usr/local/bin` (latest release tarball + sha256 verify) |

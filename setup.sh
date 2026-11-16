@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bootstrap dev environment: zsh + Powerlevel10k, Go, jq, TypeScript (tsc), Cursor, Claude Code CLI, RTK, git, clone repo.
+# Bootstrap dev environment: zsh + Powerlevel10k, Go, jq, TypeScript (tsc), Claude Code CLI, RTK, git.
 # `sh init.sh` uses dash on Debian/Ubuntu; re-exec with bash (this script needs pipefail and [[ ]]).
 if [ -z "${BASH_VERSION:-}" ]; then
   exec /usr/bin/env bash "$0" "$@"
@@ -23,16 +23,7 @@ map_arch() {
   esac
 }
 
-map_cursor_arch() {
-  case "$(uname -m)" in
-    x86_64)  echo "x64" ;;
-    aarch64|arm64) echo "arm64" ;;
-    *) die "unsupported architecture: $(uname -m)" ;;
-  esac
-}
-
 GOARCH="$(map_arch)"
-CURSOR_ARCH="$(map_cursor_arch)"
 
 # --- 1) Base packages (Debian/Ubuntu) ---
 if command -v apt-get >/dev/null 2>&1; then
@@ -131,69 +122,26 @@ else
 fi
 
 # --- 5) Node.js (for tsc) + TypeScript global → /usr/local/bin ---
-if ! command -v node >/dev/null 2>&1; then
+# Require Node >= 22.18 (claude-hud needs it); install/upgrade to Node 24 via nodesource otherwise.
+node_ok() {
+  command -v node >/dev/null 2>&1 || return 1
+  local v major minor
+  v="$(node -v 2>/dev/null)"; v="${v#v}"
+  major="${v%%.*}"; minor="${v#*.}"; minor="${minor%%.*}"
+  [[ "${major}" =~ ^[0-9]+$ && "${minor}" =~ ^[0-9]+$ ]] || return 1
+  (( major > 22 || (major == 22 && minor >= 18) ))
+}
+if ! node_ok; then
+  log "Node missing or older than 22.18 ($(node -v 2>/dev/null || echo none)); installing Node 24 via nodesource"
   if [[ -n "${SUDO}" ]]; then
-    curl -fsSL https://deb.nodesource.com/setup_22.x | $SUDO -E bash -
+    curl -fsSL https://deb.nodesource.com/setup_24.x | $SUDO -E bash -
   else
-    curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+    curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
   fi
-  $SUDO apt-get install -y nodejs
+  $SUDO apt-get install -y nodejs || log "WARN: Node 24 install failed; install from https://nodejs.org"
 fi
 if ! $SUDO npm install -g typescript --prefix /usr/local; then
   log "WARN: global TypeScript (tsc) install failed; retry: sudo npm install -g typescript --prefix /usr/local"
-fi
-
-# --- 6) Cursor (.deb, always the latest release) ---
-# The version segment of the update URL is the version the *client reports having*; the API
-# answers with the newest release regardless. Ask the JSON endpoint so we learn the actual
-# version number and can skip re-downloading ~200 MB when we are already up to date.
-CURSOR_DEB="/tmp/cursor-latest.deb"
-CURSOR_JSON="$(curl -fsSL "https://api2.cursor.sh/updates/api/download/golden/linux-${CURSOR_ARCH}-deb/cursor/0.0.0" || true)"
-CURSOR_VER="$(printf '%s' "${CURSOR_JSON}" | sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' | head -1)"
-CURSOR_URL="$(printf '%s' "${CURSOR_JSON}" | sed -n 's/.*"debUrl": *"\([^"]*\)".*/\1/p' | head -1)"
-# Fall back to the redirecting endpoint if the JSON API changes shape.
-[[ -n "${CURSOR_URL}" ]] || CURSOR_URL="https://api2.cursor.sh/updates/download/golden/linux-${CURSOR_ARCH}-deb/cursor/0.0.0"
-CURSOR_HAVE="$(dpkg-query -W -f='${Version}' cursor 2>/dev/null || true)"
-log "Cursor: latest=${CURSOR_VER:-unknown} installed=${CURSOR_HAVE:-none}"
-
-if [[ -n "${CURSOR_VER}" && "${CURSOR_HAVE}" == "${CURSOR_VER}" ]]; then
-  log "Cursor already at the latest version (${CURSOR_VER}); skipping download."
-elif curl -fsSL "${CURSOR_URL}" -o "${CURSOR_DEB}"; then
-  $SUDO apt-get install -y "${CURSOR_DEB}" 2>/dev/null || $SUDO dpkg -i "${CURSOR_DEB}" 2>/dev/null || \
-    log "WARN: Cursor .deb install failed; install from https://cursor.com"
-  $SUDO apt-get -f install -y 2>/dev/null || true
-  log "Cursor installed: $(dpkg-query -W -f='${Version}' cursor 2>/dev/null || echo 'unknown')"
-else
-  log "WARN: Cursor .deb download failed; install from https://cursor.com"
-fi
-rm -f "${CURSOR_DEB}"
-
-# --- 6b) Cursor extensions (Cursor marketplace / Open VSX ids) ---
-CURSOR_EXTS=(
-  mhutchie.git-graph      # Git Graph
-  eamodio.gitlens         # GitLens
-  waderyan.gitblame       # Git Blame
-  golang.go               # Go
-  anthropic.claude-code   # Claude Code
-)
-if command -v cursor >/dev/null 2>&1; then
-  # Electron refuses its sandbox when run as root; the CLI needs --no-sandbox there.
-  CURSOR_CLI_FLAGS=()
-  [[ "${EUID:-0}" -eq 0 ]] && CURSOR_CLI_FLAGS+=(--no-sandbox)
-  CURSOR_HAVE_EXTS="$(cursor "${CURSOR_CLI_FLAGS[@]}" --list-extensions 2>/dev/null || true)"
-  for CURSOR_EXT in "${CURSOR_EXTS[@]}"; do
-    if printf '%s\n' "${CURSOR_HAVE_EXTS}" | grep -qix "${CURSOR_EXT}"; then
-      log "Cursor extension already installed: ${CURSOR_EXT}"
-      continue
-    fi
-    if cursor "${CURSOR_CLI_FLAGS[@]}" --install-extension "${CURSOR_EXT}" --force >/dev/null 2>&1; then
-      log "Cursor extension installed: ${CURSOR_EXT}"
-    else
-      log "WARN: Cursor extension install failed: ${CURSOR_EXT} (retry: cursor --install-extension ${CURSOR_EXT})"
-    fi
-  done
-else
-  log "WARN: cursor CLI not found; skipping extension installs"
 fi
 
 # --- 7) Claude Code CLI (native installer) ---
@@ -267,19 +215,6 @@ if [[ -f "${ZSHRC}" ]] && ! grep -q 'env-init: go bin' "${ZSHRC}" 2>/dev/null; t
   printf '\n# env-init: go bin (GOPATH)\nexport PATH="${HOME}/go/bin:${PATH}"\n' >> "${ZSHRC}"
 fi
 
-# --- 11) Clone otel-traces-test → ~/Document ---
-DOC_DIR="${HOME}/Documents"
-mkdir -p "${DOC_DIR}"
-REPO_DIR="${DOC_DIR}/otel-traces-test"
-if [[ ! -d "${REPO_DIR}/.git" ]]; then
-  git clone https://github.com/Marz32onE/otel-traces-test.git "${REPO_DIR}"
-  if ! git -C "${REPO_DIR}" submodule update --init --recursive; then
-    log "WARN: git submodules failed; run: git -C ${REPO_DIR} submodule update --init --recursive"
-  fi
-else
-  log "Repo already exists at ${REPO_DIR}; skipping clone."
-fi
-
 # --- 12) RTK (Rust Token Killer) → ~/.local/bin — https://github.com/rtk-ai/rtk#quick-install-linuxmacos
 if curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh; then
   log "RTK installed: $(command -v rtk >/dev/null 2>&1 && rtk --version 2>/dev/null || echo 'rtk on PATH after new shell')"
@@ -325,8 +260,6 @@ if command -v claude >/dev/null 2>&1 || [[ -x "${HOME}/.local/bin/claude" ]]; th
     log "WARN: gopls-lsp plugin install failed"
   claude plugin install pyright-lsp@claude-plugins-official 2>/dev/null || \
     log "WARN: pyright-lsp plugin install failed"
-  claude plugin install superpowers@claude-plugins-official 2>/dev/null || \
-    log "WARN: superpowers plugin install failed"
   claude plugin marketplace add jarrodwatts/claude-hud 2>/dev/null || true
   claude plugin install claude-hud 2>/dev/null || \
     log "WARN: claude-hud plugin install failed"
@@ -338,6 +271,9 @@ if command -v claude >/dev/null 2>&1 || [[ -x "${HOME}/.local/bin/claude" ]]; th
     log "WARN: andrej-karpathy-skills plugin install failed"
   claude plugins install mattpocock-skills 2>/dev/null || \
     log "WARN: mattpocock-skills plugin install failed"
+  claude plugin marketplace add JetBrains/go-modern-guidelines 2>/dev/null || true
+  claude plugin install modern-go-guidelines@goland-claude-marketplace- 2>/dev/null || \
+    log "WARN: modern-go-guidelines plugin install failed"
 else
   log "WARN: claude CLI not found; skipping plugin installs"
 fi
@@ -447,4 +383,3 @@ log "If zsh is not your login shell yet: chsh -s \"$(command -v zsh)\""
 log ""
 log "RTK init is interactive — run in a terminal after ~/.local/bin is on PATH (e.g. new zsh):"
 log "  rtk init -g"
-log "  rtk init -g --agent cursor"
